@@ -5,7 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.ComponentModel;
 
-namespace MadScience.SimpleDI
+namespace MadScience_SimpleDI
 {
 
     public interface ISimpleDIFactory
