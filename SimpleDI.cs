@@ -83,6 +83,11 @@ namespace MadScience_SimpleDI
         /// </summary>
         private Dictionary<Type, CompiledConstructor> _constructors = new Dictionary<Type, CompiledConstructor>();
 
+        /// <summary>
+        /// If true, will silently overwrite existing registrations. If false, an exception will be thrown.
+        /// </summary>
+        public bool OverwriteIfExists { get; set; }
+
         #region CTORS
 
         public SimpleDI()
@@ -119,7 +124,7 @@ namespace MadScience_SimpleDI
 
                 Registration registration = _register.FirstOrDefault(r => r.Service == service);
 
-                if (registration != null)
+                if (!this.OverwriteIfExists && registration != null)
                     throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
 
                 // register factory against itself, as we need to create instance of this to provide service
@@ -152,7 +157,8 @@ namespace MadScience_SimpleDI
                 if (!string.IsNullOrEmpty(key) && registration != null)
                     throw new Exception($"Cannot bind key {key}, this key already exists ({registration}).");
 
-                if (!allowMultiple && _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).Any())
+                bool canThrow = !this.OverwriteIfExists && !allowMultiple;
+                if (canThrow && _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).Any())
                     throw new Exception($"Cannot bind implementation {TypeHelper.Name(implementation)} to service {TypeHelper.Name(service)}, a binding for this service already exists.");
 
                 _register.Add(new Registration { Service = service, Key = key, Implementation = implementation });
@@ -164,9 +170,9 @@ namespace MadScience_SimpleDI
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <param name="singleton"></param>
-        public void RegisterSingleton<T>(object singleton, bool overwriteIfExists = false)
+        public void RegisterSingleton<T>(object singleton)
         {
-            RegisterSingleton(typeof(T), singleton, overwriteIfExists);
+            RegisterSingleton(typeof(T), singleton);
         }
 
         /// <summary>
@@ -175,16 +181,16 @@ namespace MadScience_SimpleDI
         /// <param name="service"></param>
         /// <param name="singleton"></param>
         /// <exception cref="Exception"></exception>
-        public void RegisterSingleton(Type service, object singleton, bool overwriteIfExists = false)
+        public void RegisterSingleton(Type service, object singleton)
         {
             lock (_register)
             {
                 Registration registration = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).FirstOrDefault();
 
-                if (!overwriteIfExists && registration != null)
+                if (!this.OverwriteIfExists && registration != null)
                     throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
 
-                if (overwriteIfExists && registration != null)
+                if (this.OverwriteIfExists && registration != null)
                     _register.Remove(registration);
 
                 _register.Add(new Registration { Service = service, Singleton = singleton });
