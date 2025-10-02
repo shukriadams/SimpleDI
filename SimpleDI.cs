@@ -21,11 +21,6 @@ namespace MadScience_SimpleDI
         class Registration
         {
             /// <summary>
-            /// Plugins can be registered by unique strings.
-            /// </summary>
-            public string Key { get; set; }
-
-            /// <summary>
             /// Service or interface type is registered by.
             /// </summary>
             public Type Service { get; set; }
@@ -48,19 +43,14 @@ namespace MadScience_SimpleDI
             public override string ToString()
             {
                 string description = "";
-                    
-                if (string.IsNullOrEmpty(this.Key))
-                    description += "Key not set; ";
-                else
-                    description += $"Key {this.Key}; ";
 
                 if (this.Service != null)
                     description += $"Service {this.Service.FullName}; ";
-                else 
+                else
                 {
                     if (this.Implementation != null)
                         description += $"Implementation {this.Implementation.FullName}; ";
-                    else 
+                    else
                     {
                         if (this.Factory != null)
                             description += $"Factory {this.Factory.FullName}; ";
@@ -100,17 +90,9 @@ namespace MadScience_SimpleDI
 
         #region METHODS
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <typeparam name="TService"></typeparam>
-        /// <typeparam name="TImplementation"></typeparam>
-        /// <param name="service"></param>
-        /// <param name="implementation"></param>
-        /// <param name="allowMultiple"></param>
-        public void Register<TService, TImplementation>(string key = "", bool allowMultiple = false)
+        public void Register<TService, TImplementation>(bool allowMultiple = false)
         {
-            Register(typeof(TService), typeof(TImplementation), key, allowMultiple);
+            Register(typeof(TService), typeof(TImplementation), allowMultiple);
         }
 
         public void RegisterFactory<TService, TFactory>()
@@ -124,8 +106,13 @@ namespace MadScience_SimpleDI
 
                 Registration registration = _register.FirstOrDefault(r => r.Service == service);
 
-                if (!this.OverwriteIfExists && registration != null)
-                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
+                if (registration != null)
+                {
+                    if (this.OverwriteIfExists)
+                        _register.Remove(registration);
+                    else
+                        throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
+                }
 
                 // register factory against itself, as we need to create instance of this to provide service
                 if (!_register.Any(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(factory, true)))
@@ -137,13 +124,13 @@ namespace MadScience_SimpleDI
         }
 
         /// <summary>
-        /// Binds an implementation to a service type. Registration is required before resolving.
+        /// Binds an implementation to a service type. 
         /// </summary>
         /// <param name="service"></param>
         /// <param name="implementation"></param>
         /// <param name="allowMultiple"></param>
         /// <exception cref="Exception"></exception>
-        public void Register(Type service, Type implementation, string key = "", bool allowMultiple = false)
+        public void Register(Type service, Type implementation, bool allowMultiple = false)
         {
             lock (_register)
             {
@@ -153,15 +140,17 @@ namespace MadScience_SimpleDI
                 if (implementation.IsAbstract)
                     throw new Exception($"Cannot bind abstract service type {TypeHelper.Name(implementation)}.");
 
-                Registration registration = _register.FirstOrDefault(r => r.Key == key);
-                if (!string.IsNullOrEmpty(key) && registration != null)
-                    throw new Exception($"Cannot bind key {key}, this key already exists ({registration}).");
-
+                Registration registration = _register.FirstOrDefault(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true));
                 bool canThrow = !this.OverwriteIfExists && !allowMultiple;
-                if (canThrow && _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).Any())
-                    throw new Exception($"Cannot bind implementation {TypeHelper.Name(implementation)} to service {TypeHelper.Name(service)}, a binding for this service already exists.");
+                if (registration != null)
+                {
+                    if (this.OverwriteIfExists && !allowMultiple)
+                        _register.Remove(registration);
+                    else if (!allowMultiple)
+                        throw new Exception($"Cannot bind implementation {TypeHelper.Name(implementation)} to service {TypeHelper.Name(service)}, a binding for this service already exists.");
+                }
 
-                _register.Add(new Registration { Service = service, Key = key, Implementation = implementation });
+                _register.Add(new Registration { Service = service, Implementation = implementation });
             }
         }
 
@@ -187,11 +176,13 @@ namespace MadScience_SimpleDI
             {
                 Registration registration = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).FirstOrDefault();
 
-                if (!this.OverwriteIfExists && registration != null)
-                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
-
-                if (this.OverwriteIfExists && registration != null)
-                    _register.Remove(registration);
+                if (registration != null)
+                {
+                    if (this.OverwriteIfExists)
+                        _register.Remove(registration);
+                    else
+                        throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
+                }
 
                 _register.Add(new Registration { Service = service, Singleton = singleton });
             }
@@ -200,16 +191,6 @@ namespace MadScience_SimpleDI
         public bool IsServiceRegistered(Type service)
         {
             return _register.Where(r => r.Service != null && r.Service == service).Any();
-        }
-
-        public T ResolveByKey<T>(string key)
-        {
-            Type service = typeof(T);
-            IEnumerable<Registration> matches = _register.Where(r => r.Key == key);
-            if (!matches.Any())
-                throw new Exception($"No implementations registered for key {key}.");
-
-            return (T)ResolveInternal(matches.First(), service);
         }
 
         public T Resolve<T>()
