@@ -5,18 +5,10 @@ using System.Linq;
 using System.Reflection;
 using System.ComponentModel;
 
-namespace MadScience.SimpleDI
+namespace MadScience_SimpleDI
 {
-
-    public interface ISimpleDIFactory
-    {
-        object Resolve<T>();
-
-        object Resolve(Type service);
-    }
-
     /// <summary>
-    /// A very simple dependency injection system in a single file.
+    /// A simple dependency injection system in a single file.
     /// </summary>
     public class SimpleDI
     {
@@ -52,6 +44,33 @@ namespace MadScience.SimpleDI
             /// A global instance that fulfills service. Replaced by Implementation or Factory.
             /// </summary>
             public object Singleton { get; set; }
+
+            public override string ToString()
+            {
+                string description = "";
+                    
+                if (string.IsNullOrEmpty(this.Key))
+                    description += "Key not set; ";
+                else
+                    description += $"Key {this.Key}; ";
+
+                if (this.Service != null)
+                    description += $"Service {this.Service.FullName}; ";
+                else 
+                {
+                    if (this.Implementation != null)
+                        description += $"Implementation {this.Implementation.FullName}; ";
+                    else 
+                    {
+                        if (this.Factory != null)
+                            description += $"Factory {this.Factory.FullName}; ";
+                        else
+                            description += "Registration invalid";
+                    }
+                }
+
+                return description;
+            }
         }
 
         /// <summary>
@@ -98,8 +117,10 @@ namespace MadScience.SimpleDI
                 if (!typeof(ISimpleDIFactory).IsAssignableFrom(factory))
                     throw new Exception($"Factory type {factory.Name} does not implement {typeof(ISimpleDIFactory).Name}.");
 
-                if (_register.Where(r => r.Service == service).Any())
-                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists.");
+                Registration registration = _register.FirstOrDefault(r => r.Service == service);
+
+                if (registration != null)
+                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
 
                 // register factory against itself, as we need to create instance of this to provide service
                 if (!_register.Any(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(factory, true)))
@@ -125,10 +146,11 @@ namespace MadScience.SimpleDI
                     throw new Exception($"Cannot bind {TypeHelper.Name(implementation)}, type has more than one constructor.");
 
                 if (implementation.IsAbstract)
-                    throw new Exception($"Cannot bind service type {TypeHelper.Name(implementation)}.");
+                    throw new Exception($"Cannot bind abstract service type {TypeHelper.Name(implementation)}.");
 
-                if (!string.IsNullOrEmpty(key) && _register.Where(r => r.Key == key).Any())
-                    throw new Exception($"Cannot bind key {key}, this key already exists.");
+                Registration registration = _register.FirstOrDefault(r => r.Key == key);
+                if (!string.IsNullOrEmpty(key) && registration != null)
+                    throw new Exception($"Cannot bind key {key}, this key already exists ({registration}).");
 
                 if (!allowMultiple && _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).Any())
                     throw new Exception($"Cannot bind implementation {TypeHelper.Name(implementation)} to service {TypeHelper.Name(service)}, a binding for this service already exists.");
@@ -160,7 +182,7 @@ namespace MadScience.SimpleDI
                 Registration registration = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).FirstOrDefault();
 
                 if (!overwriteIfExists && registration != null)
-                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists.");
+                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
 
                 if (overwriteIfExists && registration != null)
                     _register.Remove(registration);
@@ -374,6 +396,20 @@ namespace MadScience.SimpleDI
         #endregion
     }
 
+    /// <summary>
+    /// If you want to resolve your own types at calling time, implement this interface on some class and bind
+    /// it against the type it will provide.
+    /// </summary>
+    public interface ISimpleDIFactory
+    {
+        object Resolve<T>();
+
+        object Resolve(Type service);
+    }
+
+    /// <summary>
+    /// Utilities for quering types.
+    /// </summary>
     public class TypeHelper
     {
         static Assembly _commonAssembly;
