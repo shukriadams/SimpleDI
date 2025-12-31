@@ -1,2 +1,3 @@
 # SimpleDI
-Simple drop-in dependency injection in a single file.
+
+Simple dependency injection for C#. Dotnet 6.0 or higher.

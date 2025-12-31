@@ -12,82 +12,36 @@ namespace MadScience_SimpleDI
     /// </summary>
     public class SimpleDI
     {
+        #region FIELDS
+        
         private delegate object CompiledConstructor(params object[] args);
 
-        private static IList<Registration> ApplicationContextRegister = new List<Registration>();
+        private static RegistrationCollection ApplicationContextRegister = new RegistrationCollection();
 
         private static Dictionary<Type, CompiledConstructor> ApplicationContextConstructors = new Dictionary<Type, CompiledConstructor>();
-
-        class Registration
-        {
-            /// <summary>
-            /// Plugins can be registered by unique strings.
-            /// </summary>
-            public string Key { get; set; }
-
-            /// <summary>
-            /// Service or interface type is registered by.
-            /// </summary>
-            public Type Service { get; set; }
-
-            /// <summary>
-            /// The concrete type that fulfills the service requirement. Replaced by Factory or Singleton.
-            /// </summary>
-            public Type Implementation { get; set; }
-
-            /// <summary>
-            /// A factory that provides an implementation. Replaced by Implementation or Singleton.
-            /// </summary>
-            public Type Factory { get; set; }
-
-            /// <summary>
-            /// A global instance that fulfills service. Replaced by Implementation or Factory.
-            /// </summary>
-            public object Singleton { get; set; }
-
-            public override string ToString()
-            {
-                string description = "";
-                    
-                if (string.IsNullOrEmpty(this.Key))
-                    description += "Key not set; ";
-                else
-                    description += $"Key {this.Key}; ";
-
-                if (this.Service != null)
-                    description += $"Service {this.Service.FullName}; ";
-                else 
-                {
-                    if (this.Implementation != null)
-                        description += $"Implementation {this.Implementation.FullName}; ";
-                    else 
-                    {
-                        if (this.Factory != null)
-                            description += $"Factory {this.Factory.FullName}; ";
-                        else
-                            description += "Registration invalid";
-                    }
-                }
-
-                return description;
-            }
-        }
 
         /// <summary>
         /// Registered service-implementation combinations.
         /// </summary>
-        private IList<Registration> _register = new List<Registration>();
+        private RegistrationCollection _register = new RegistrationCollection();
 
         /// <summary>
         /// Caches compile constructors
         /// </summary>
         private Dictionary<Type, CompiledConstructor> _constructors = new Dictionary<Type, CompiledConstructor>();
 
+
+        #endregion
+        
+        #region PROPERTIES 
+        
         /// <summary>
         /// If true, will silently overwrite existing registrations. If false, an exception will be thrown.
         /// </summary>
         public bool OverwriteIfExists { get; set; }
 
+        #endregion
+        
         #region CTORS
 
         public SimpleDI()
@@ -113,26 +67,34 @@ namespace MadScience_SimpleDI
             Register(typeof(TService), typeof(TImplementation), key, allowMultiple);
         }
 
-        public void RegisterFactory<TService, TFactory>()
+        public void RegisterFactory<TService, TFactory>(bool isSingleton = false)
         {
             lock (_register)
             {
                 Type factory = typeof(TFactory);
                 Type service = typeof(TService);
+                
+                // simpledi factories are types, they must implement the ISimpleDIFactory interface, we use this
+                // to create instances of them
                 if (!typeof(ISimpleDIFactory).IsAssignableFrom(factory))
                     throw new Exception($"Factory type {factory.Name} does not implement {typeof(ISimpleDIFactory).Name}.");
 
-                Registration registration = _register.FirstOrDefault(r => r.Service == service);
+                Registration registration = _register.GetService(service);
 
                 if (!this.OverwriteIfExists && registration != null)
                     throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
 
-                // register factory against itself, as we need to create instance of this to provide service
-                if (!_register.Any(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(factory, true)))
+                // register factory against itself, SimpleDI factories are objects, and we'll need an instance of one to provide it as a service
+                if (!_register.HasService(factory))
                     _register.Add(new Registration { Service = factory, Implementation = factory });
 
-                // register factory against service 
-                _register.Add(new Registration { Service = service, Factory = factory });
+                // register factory against service
+                _register.Add(new Registration
+                {
+                    Service = service, 
+                    Factory = factory, 
+                    IsSingleton = isSingleton
+                });
             }
         }
 
@@ -158,7 +120,7 @@ namespace MadScience_SimpleDI
                     throw new Exception($"Cannot bind key {key}, this key already exists ({registration}).");
 
                 bool canThrow = !this.OverwriteIfExists && !allowMultiple;
-                if (canThrow && _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).Any())
+                if (canThrow && _register.HasService(service))
                     throw new Exception($"Cannot bind implementation {TypeHelper.Name(implementation)} to service {TypeHelper.Name(service)}, a binding for this service already exists.");
 
                 _register.Add(new Registration { Service = service, Key = key, Implementation = implementation });
@@ -175,6 +137,56 @@ namespace MadScience_SimpleDI
             RegisterSingleton(typeof(T), singleton);
         }
 
+        public void RegisterFunction<T>(Func<object> callback,bool isSingleton = false)
+        {
+            lock (_register)
+            {
+                Type service = typeof(T);
+                Registration registration = _register.GetService(service);
+
+                if (!this.OverwriteIfExists && registration != null)
+                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
+
+                if (this.OverwriteIfExists && registration != null)
+                    _register.Remove(registration);
+                
+                _register.Add(new Registration { Service = service, Function = callback, IsSingleton = isSingleton});
+            }
+        }
+
+        public void Tag<TImplementation, TTag>()
+        {
+            lock (_register)
+            {
+                Type implementation = typeof(TImplementation);
+                Registration registration = _register.GetExpectedImplementation(implementation);
+                registration.ServiceTags.Add(typeof(TTag));
+            }
+        }
+
+        /// <summary>
+        /// Registers a generic against an implementation of a type
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <typeparam name="TImplementation"></typeparam>
+        /// <exception cref="Exception"></exception>
+        public void RegisterSingleton<T, TImplementation>()
+        {
+            lock (_register)
+            {
+                Type service = typeof(T);
+                Registration registration = _register.GetService(service);
+
+                if (!this.OverwriteIfExists && registration != null)
+                    throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
+
+                if (this.OverwriteIfExists && registration != null)
+                    _register.Remove(registration);
+                
+                _register.Add(new Registration { Service = service, Implementation = typeof(TImplementation), IsSingleton = true });
+            }
+        }
+        
         /// <summary>
         /// Binds an instance to a service type. The given instance will always be returned for that service.
         /// </summary>
@@ -185,7 +197,7 @@ namespace MadScience_SimpleDI
         {
             lock (_register)
             {
-                Registration registration = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true)).FirstOrDefault();
+                Registration registration = _register.GetService(service);
 
                 if (!this.OverwriteIfExists && registration != null)
                     throw new Exception($"Cannot bind service type {TypeHelper.Name(service)}, a binding for this already exists ({registration}).");
@@ -199,7 +211,7 @@ namespace MadScience_SimpleDI
 
         public bool IsServiceRegistered(Type service)
         {
-            return _register.Where(r => r.Service != null && r.Service == service).Any();
+            return _register.HasService(service);
         }
 
         public T ResolveByKey<T>(string key)
@@ -215,7 +227,7 @@ namespace MadScience_SimpleDI
         public T Resolve<T>()
         {
             Type service = typeof(T);
-            IEnumerable<Registration> matches = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true));
+            IEnumerable<Registration> matches = _register.ResolveService(service);
             if (matches.Count() > 1)
                 throw new Exception($"Multiple implementations are registered for service {TypeHelper.Name(service)}.");
 
@@ -223,12 +235,6 @@ namespace MadScience_SimpleDI
                 throw new Exception($"No implementations are registered for service {TypeHelper.Name(service)}.");
 
             Registration registration = matches.First();
-            if (registration.Factory != null)
-            {
-                ISimpleDIFactory factory = this.Resolve(registration.Factory) as ISimpleDIFactory;
-                return (T)factory.Resolve<T>();
-            }
-
             return (T)ResolveInternal(registration, service);
         }
 
@@ -240,7 +246,7 @@ namespace MadScience_SimpleDI
         /// <exception cref="Exception"></exception>
         public object Resolve(Type service)
         {
-            IEnumerable<Registration> matches = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true));
+            IEnumerable<Registration> matches = _register.ResolveService(service);
             if (matches.Count() > 1)
                 throw new Exception($"Multiple implementations are registered for service {TypeHelper.Name(service)}.");
 
@@ -249,7 +255,8 @@ namespace MadScience_SimpleDI
 
             return ResolveInternal(matches.First(), service);
         }
-
+        
+        /* PHASE OUT
         public object ResolveImplementation(Type implementation)
         {
             IEnumerable<Registration> matches = _register.Where(r => r.Implementation != null && TypeHelper.Name(r.Implementation, true) == TypeHelper.Name(implementation, true));
@@ -261,7 +268,8 @@ namespace MadScience_SimpleDI
 
             return ResolveInternal(matches.First(), implementation);
         }
-
+        */
+        
         public IEnumerable<T> ResolveAll<T>()
         {
             IEnumerable<object> objects = ResolveAll(typeof(T));
@@ -280,7 +288,7 @@ namespace MadScience_SimpleDI
         public IEnumerable<object> ResolveAll(Type service)
         {
             IList<object> instances = new List<object>();
-            IEnumerable<Registration> registrations = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true));
+            IEnumerable<Registration> registrations = _register.ResolveService(service);
             if (!registrations.Any())
                 return instances;
 
@@ -297,8 +305,7 @@ namespace MadScience_SimpleDI
         /// <returns></returns>
         public object ResolveFirst(Type service)
         {
-            IList<object> instances = new List<object>();
-            IEnumerable<Registration> registrations = _register.Where(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(service, true));
+            IEnumerable<Registration> registrations = _register.ResolveService(service);
             if (!registrations.Any())
                 throw new Exception($"No implementations registered for service {TypeHelper.Name(service)}.");
 
@@ -314,15 +321,48 @@ namespace MadScience_SimpleDI
         /// <exception cref="Exception"></exception>
         private object ResolveInternal(Registration registration, Type requestedService)
         {
-            if (registration.Singleton != null)
-                return registration.Singleton;
-
+            // it's a function, do function things, then exit
+            if (registration.Function != null)
+            {
+                if (registration.IsSingleton && registration.Singleton == null)
+                    registration.Singleton = registration.Function.Invoke(); 
+                        
+                if (registration.IsSingleton)
+                    return registration.Singleton;
+                
+                return registration.Function.Invoke();
+            }
+            
+            // it's a factory, do factory things then exit 
             if (registration.Factory != null)
             {
                 ISimpleDIFactory factory = this.Resolve(registration.Factory) as ISimpleDIFactory;
+                if (factory == null)
+                    throw new NullReferenceException($"Factory for service {registration.Service} resolved to null.");
+                
+                if (registration.IsSingleton && registration.Singleton == null)
+                    registration.Singleton = factory.Resolve(requestedService);
+                
+                if (registration.IsSingleton)
+                    return registration.Singleton;
+
                 return factory.Resolve(requestedService);
             }
+            
+            // type is flagged as singleton and hasn't been set, so we should set it internally 
+            if (registration.IsSingleton && registration.Singleton == null)
+                registration.Singleton = InstantiateFromRegistration(registration);
 
+            // singleton instance was set, return that
+            if (registration.Singleton != null)
+                return registration.Singleton;
+            
+            // make a new instance of whatever registration contains
+            return InstantiateFromRegistration(registration);
+        }
+
+        private object InstantiateFromRegistration(Registration registration)
+        {
             // safety null check
             if (registration.Implementation == null)
                 throw new Exception("Implementation is null ; this should not happen");
@@ -344,10 +384,10 @@ namespace MadScience_SimpleDI
             foreach (ParameterInfo parameterInfo in ctor.GetParameters())
             {
                 // inner generics parameterInfo.ParameterType.GenericTypeArguments
-                if (!_register.Any(r => TypeHelper.Name(r.Service, true) == TypeHelper.Name(parameterInfo.ParameterType, true)))
+                if (!_register.Any(r => TypeHelper.Name(r.Service) == TypeHelper.Name(parameterInfo.ParameterType)))
                     throw new Exception($"Could not create instance of {TypeHelper.Name(registration.Implementation)}, ctor arg {TypeHelper.Name(parameterInfo.ParameterType)} is not registered");
 
-                //  turtles all the way down
+                // recursively resolve instances for all ctor args, turtles all the way down
                 object instance = Resolve(parameterInfo.ParameterType);
                 args.Add(instance);
             }
@@ -371,8 +411,8 @@ namespace MadScience_SimpleDI
 
             Expression[] argsExp = new Expression[ctorParameters.Length];
 
-            //pick each arg from the params array 
-            //and create a typed expression of them
+            // pick each arg from the params array 
+            // and create a typed expression of them
             for (int i = 0; i < ctorParameters.Length; i++)
             {
                 Expression index = Expression.Constant(i);
@@ -400,93 +440,5 @@ namespace MadScience_SimpleDI
         }
 
         #endregion
-    }
-
-    /// <summary>
-    /// If you want to resolve your own types at calling time, implement this interface on some class and bind
-    /// it against the type it will provide.
-    /// </summary>
-    public interface ISimpleDIFactory
-    {
-        object Resolve<T>();
-
-        object Resolve(Type service);
-    }
-
-    /// <summary>
-    /// Utilities for quering types.
-    /// </summary>
-    public class TypeHelper
-    {
-        static Assembly _commonAssembly;
-
-        static TypeHelper()
-        {
-            _commonAssembly = typeof(TypeHelper).Assembly;
-        }
-
-        public static string Name<T>()
-        {
-            return Name(typeof(T));
-        }
-
-        public static string Name(object obj)
-        {
-            return Name(obj.GetType());
-        }
-
-        public static string Name(Type type, bool removeGeneric = false)
-        {
-            string name = $"{type.Namespace}.{type.Name}";
-            if (name.EndsWith("`1"))
-                name = name.Substring(0, name.Length - 2);
-
-            return name;
-        }
-
-        public static Assembly GetAssembly(string namespc)
-        {
-            Assembly assembly = AppDomain.CurrentDomain
-                .GetAssemblies()
-                .Where(a => a.GetName().Name == namespc)
-                .FirstOrDefault();
-
-            if (assembly == null)
-                assembly = Assembly.Load(namespc);
-
-            return assembly;
-        }
-
-        /// <summary>
-        /// Gets first occurrence of the given attribute on the source type.
-        /// 
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="source"></param>
-        /// <returns></returns>
-        public static T GetAttribute<T>(Type source)
-        {
-            return TypeDescriptor.GetAttributes(source).OfType<T>().FirstOrDefault();
-        }
-
-        public static Type? ResolveType(string namespacedType)
-        {
-            // TODO - cache type lookup for performance
-            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type? concreteType = a.GetType(namespacedType);
-                if (concreteType != null)
-                    return concreteType;
-            }
-
-            // couldn't resolve type, does it live in an assembly that needs to be loaded?
-
-            return null;
-        }
-
-        public static Type GetCommonType(string typeNamespacedName)
-        {
-            return _commonAssembly.GetType(typeNamespacedName);
-        }
     }
 }
